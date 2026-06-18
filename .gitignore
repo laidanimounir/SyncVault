@@ -1,0 +1,27 @@
+﻿# Environment & Secrets
+.env
+.env.local
+.env.*.local
+
+# Visual Studio
+.vs/
+bin/
+obj/
+*.user
+*.suo
+
+# Build outputs
+[Dd]ebug/
+[Rr]elease/
+
+# NuGet
+packages/
+*.nupkg
+
+# OS
+Thumbs.db
+.DS_Store
+desktop.ini
+
+# Logs
+*.log

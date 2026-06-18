@@ -1,166 +1,255 @@
 # SyncVault — Session 01 Progress Report
 
-## Session Overview
-
 **Date:** June 18, 2026
-**Scope:** Full project analysis, feasibility study, Supabase setup, task planning
-**Status:** Foundation ready — implementation begins
+**Git branches:** ProManSystem `master` (ahead of origin by 20 commits), SyncVault `main`
+**Status:** Phase 1-4 + 6 code complete. Phase 2 sync engine confirmed functional. One open bug remains.
 
 ---
 
-## What Was Accomplished
+## CURRENT WORKING STATE
 
-### 1. ProManSystem Deep Analysis
-- Read all 97 `.cs` files, 44 `.xaml` files, and project configuration
-- Documented architecture: mixed code-behind + partial MVVM, no DI container
-- Mapped all 20 SQLite tables with columns and relationships
-- Catalogued all services, models, ViewModels, and NuGet packages
-- Identified weaknesses: hardcoded paths, no soft-delete, no `updated_at`, static services
+### SQLite Local DB
+- Path: `C:\Users\Mounir\AppData\Local\ProManSystem\app.db`
+- 20 data tables + `pending_sync` tracking table
+- 36 SQLite triggers across 12 business tables (INSERT/UPDATE/DELETE on each)
+- WAL mode active, `busy_timeout=5000`, `synchronous=FULL` applied via `SqlitePragmaInterceptor` on all EF Core connections
+- `device_id` auto-generated on first launch: `PC-MOUNIR-MAIN-4e2365fd`
 
-### 2. SyncVault README Analysis
-- Understood full architecture: Offline-First, WAL mode, AES-256-GCM, 3-2-1 backup
-- Validated against Supabase free tier (500 MB DB, 1 GB storage, 7-day inactivity pause)
-- Confirmed AES-256-GCM is fully supported on Windows .NET 8
-- Adjusted time estimates from 19h (optimistic) to 45-55h (realistic)
+### Supabase Cloud
+- Project: `ProManSystem-Sync` (qlcwuxovpcaknxbdzuby)
+- **21 tables total**: 4 infrastructure (backups, sync_logs, devices, ping_logs) + 17 data tables matching local schema
+- All 17 data tables have `id` (BIGINT PK), `device_id` (TEXT), `updated_at` (TEXT), other columns TEXT
+- Connectivity detection works: pings `/rest/v1/` → 401 Unauthorized → classified as Online
 
-### 3. Cross-Analysis & ROADMAP
-- Feasibility verdict: 92% confidence, Medium difficulty
-- 40-45% of WPF code needs modification
-- 19 new files to create, 5 existing files to modify
-- 6 implementation phases over 6 weeks
+### UI Status Bar
+- `TxtConnectionStatus`: updates via `App.ConnectivityStateChanged` event + reads `App.IsOnline` on load (race condition fix applied)
+- `TxtPendingSync`: updates via `DispatcherTimer` every 10s reading `SyncEngine.GetPendingCountAsync()`
+- `TxtLastBackup`: reads `SyncEngine.LastSyncTime` property
 
-### 4. Supabase Infrastructure (via MCP)
-- ✅ Created 4 tables: `backups`, `sync_logs`, `devices`, `ping_logs`
-- ✅ Enabled RLS with `dev_allow_all` policy on all 4 tables
-- ✅ Enabled Realtime publication on `backups`, `sync_logs`, `devices`
-- ✅ Created Storage bucket: `backups` (private)
-- ✅ Created Storage bucket: `immutable-backups` (private)
-- ✅ Set DELETE deny policy on `immutable-backups`
-
-### 5. Project Configuration
-- ✅ `.env` populated with actual Supabase credentials
-- ✅ `.gitignore` protecting all secrets
-- ✅ `.env.example` for GitHub
-- ✅ 3-project architecture confirmed (ProManSystem + SyncVault + Supabase)
-- ✅ Dashboard decided to live inside `SyncVault/dashboard/` (not separate repo)
+### Sync Pipeline (confirmed working)
+```
+User saves in UI → EF Core SaveChanges → SQLite trigger fires → INSERT pending_sync
+→ FlushPendingAsync reads row → reads full row from SQLite → JSON serialize
+→ POST /rest/v1/{table}?on_conflict=id (with Prefer: merge-duplicates header)
+→ Supabase inserts/upserts → EF Core marks synced=1 → SaveChanges persists flag
+```
 
 ---
 
-## Decisions Made and Rationale
+## BUGS FIXED THIS SESSION (chronological)
 
-| Decision | Rationale |
-|----------|-----------|
-| **Integrate, don't rebuild** | ProManSystem already has backup/sync foundations; extending is 30% faster |
-| **Gradual DI rollout** | 44 windows use `new AppDbContext()` directly; full conversion risks breakage |
-| **Dashboard in SyncVault repo** | One repo for all backup/sync config; Vercel supports subdirectory deploys |
-| **Defer web dashboard** | BackupManagerWindow covers all needs; web adds 8-10h without immediate value |
-| **Defer Google Drive layer** | 2-1 (local + Supabase) is sufficient; 3-2-1 is Phase 6+ enhancement |
-| **Dev RLS policy (USING true)** | Development phase; will tighten before production |
-| **`device_id` in pending_sync only** | Avoids polluting 15 entity models with a field no single-user app needs |
+### 1. .env not loaded at runtime
+- **Root cause:** WPF doesn't load `.env` files; Supabase env vars were null
+- **Fix:** Created `DotEnvLoader.cs` that reads `.env` and calls `Environment.SetEnvironmentVariable()`. Called before `AppHost.Build()` in `App.xaml.cs`
+- **Commit:** `fix: load .env variables before DI container initialization`
 
----
+### 2. Deadlock: SupabaseClientFactory.InitializeAsync blocking UI thread
+- **Root cause:** `InitializeAsync().GetAwaiter().GetResult()` called synchronously on UI thread
+- **Fix:** Changed to `Task.Run(async () => await client.InitializeAsync())` — fire and forget
+- **Commit:** `fix: restore main window visibility after DI initialization`
 
-## Obstacles Encountered
+### 3. EF Core constructor ambiguity
+- **Root cause:** `AddDbContextFactory` couldn't resolve between 2 AppDbContext constructors
+- **Fix:** Replaced `AddDbContextFactory<T>` with custom `AppDbContextFactory : IDbContextFactory<AppDbContext>` that calls `new AppDbContext()` directly. Added `DbContextOptions` constructor guarded by `IsConfigured`.
+- **Commit:** `fix: remove duplicate AppDbContext constructors`
 
-| Obstacle | Resolution |
-|----------|------------|
-| `supabase-laidani` MCP had privilege errors | Switched to default `supabase` MCP integration — worked immediately |
-| Storage bucket creation failed with anon key | Required `service_role_key`; user provided it |
-| `sqlite3` CLI not available on Windows | Used `Microsoft.Data.Sqlite` via C# and file inspection instead |
-| 4 tables returned empty in initial check | Confirmed project was freshly created — all good |
+### 4. ConnectivityWatcher always Offline
+- **Root cause 1:** `NetworkInterface.GetIsNetworkAvailable()` unreliable on Windows
+- **Root cause 2:** Background `Task.Run(async () => await CheckAndNotify())` — exceptions swallowed
+- **Fix:** Replaced with real HTTP ping to Supabase `/rest/v1/`. Added `ConnLog()` file logging.
+- **Commit:** `fix: replace NetworkInterface check with real HTTP ping`
 
----
+### 5. SQLite triggers never executed
+- **Root cause:** `DatabaseFacade.ExecuteSqlRaw()` doesn't exist in EF Core 8 SQLite — all SQL statements failed silently inside try-catch
+- **Fix:** Rewrote `ExecuteSyncSchema` and `ExecuteSyncTriggers` to use ADO.NET `DbCommand.ExecuteNonQuery()`. Created `SplitSqlStatements()` that parses `CREATE TRIGGER...END;` as whole blocks.
+- **Applied 36 triggers manually to live DB** via ad-hoc console app
 
-## 36-Task Implementation Plan
+### 6. busy_timeout=0 on EF Core connections
+- **Root cause:** PRAGMAs are per-connection; `InitializeDatabase` only set them on its own connection
+- **Fix:** Created `SqlitePragmaInterceptor : DbConnectionInterceptor` that applies `busy_timeout=5000`, `journal_mode=WAL`, `synchronous=FULL`, `foreign_keys=ON` on every connection open
+- **Commit:** `fix: apply SQLite PRAGMAs on every EF Core connection`
 
-### ProManSystem Commits (Tasks 1-30)
+### 7. Status bar never updated
+- **Root cause:** `TxtPendingSync` and `TxtLastBackup` were static text in XAML — no code-behind to update them
+- **Fix:** Added `RefreshStatusBarAsync()` method + `DispatcherTimer` (10s). Reads `SyncEngine.GetPendingCountAsync()` and `SyncEngine.LastSyncTime`. Injected `ISyncEngine` into HomeWindow.
+- **Commit:** `wire HomeWindow status bar with live pending count`
 
-**Phase 1 — Foundation (Tasks 1-11):**
-1. add DI packages for host builder and supabase SDK
-2. create AppHost and ServiceCollectionExtensions for DI container
-3. wire AppHost into application startup
-4. extract ICurrentCompanyService interface from singleton
-5. refactor DatabaseMaintenanceService from static class to injectable instance
-6. enable WAL mode and full synchronous pragmas on database init
-7. add PendingSync entity model for change tracking
-8. add pending_sync table definition and sync columns to EF Core context
-9. create SQL migration for updated_at and is_deleted columns on all tables
-10. create SQL triggers for automatic change tracking on all synced tables
-11. execute sync schema and triggers during database initialization
+### 8. Race condition: HomeWindow misses Online event
+- **Root cause:** ConnectivityWatcher fires Online via `Task.Run` before HomeWindow subscribes to event
+- **Fix:** Added `OnConnectivityStateChanged(App.IsOnline)` via `Dispatcher.BeginInvoke` in constructor
+- **Commit:** `fix race condition read App.IsOnline on load`
 
-**Phase 2 — Sync Engine (Tasks 12-18):**
-12. add ConnectivityWatcher service to detect network state changes
-13. add DailyPinger service to keep Supabase project alive
-14. add SupabaseClientFactory for SDK initialization from env vars
-15. add BackupGuard to prevent data zeroing and undersized backups
-16. add SyncEngine with pending change flush and progress reporting
-17. register all Phase 2 sync services in DI container
-18. add sync engine start and connectivity hooks to application startup
+### 9. C:\ file write access denied
+- **Root cause:** Debug logs wrote to `C:\env_debug.txt`, `C:\conn_debug.txt` — requires admin
+- **Fix:** Changed all paths to `%LocalAppData%\ProManSystem\`
+- **Commit:** `fix debug log paths from C drive to LocalAppData`
 
-**Phase 3 — Backup System (Tasks 19-25):**
-19. add ShadowCopyService for local database mirror to secondary drive
-20. add CredentialManager PInvoke wrapper for Windows native credential storage
-21. add SecureBackupService with AES-256-GCM encryption and Supabase upload
-22. add BackupRotationService with checksum validation before deleting old backups
-23. add DisasterRecoveryService for database recovery from shadow copy or cloud
-24. add SaltManager for encryption key backup strategies
-25. register all Phase 3 backup services in DI container
+### 10. EF Core `no such column: p.CompanyId` in pending_sync query
+- **Root cause:** `PendingSync` model uses PascalCase properties but SQLite table has snake_case columns (created via raw SQL, not EF Core)
+- **Fix:** Added `[Column("snake_name")]` attributes: `table_name`, `row_id`, `company_id`, `old_data`, `device_id`
+- **Commit:** `fix column mappings for pending_sync snake_case`
 
-**Phase 4 — UI Integration (Tasks 26-28):**
-26. add CloseConfirmWindow with backup prompt before application exit
-27. add BackupManagerWindow for local and cloud backup management
-28. add sync and backup status bar to HomeWindow shell
+### 11. 404 Not Found on Supabase upsert
+- **Root cause:** Supabase only had 4 infrastructure tables — 17 ProManSystem data tables never created
+- **Fix:** Created 17 tables via Supabase migration matching local schema (all columns TEXT for max compatibility)
+- **MCP:** `create_promanager_data_tables` migration
 
-**Phase 6 — Hardening (Tasks 29-30):**
-29. improve ConflictResolver with device-aware merge logic
-30. add DI registration for all remaining SyncVault services
+### 12. 400 Bad Request on upsert
+- **Root cause 1:** `on_conflict=Id` (PascalCase) — Postgres column is `id` (lowercase)
+- **Root cause 2:** Missing `Prefer: resolution=merge-duplicates` header for upsert
+- **Root cause 3:** `device_id` column missing from Supabase tables (SyncEngine adds it to every row)
+- **Fix:** Changed to `on_conflict=id`, added `Prefer` header in HttpClient defaults, added `device_id TEXT` to all 17 tables
+- **Commit:** `fix upsert request casing and add merge-duplicates header`
 
-### SyncVault Commits (Tasks 31-36)
+### 13. DELETE path 400 + response body not captured
+- **Root cause:** `Id=eq.{id}` (PascalCase) + `EnsureSuccessStatusCode()` didn't log body
+- **Fix:** Changed to `id=eq.{id}` (lowercase), accept 404 as success (row doesn't exist = already deleted), log response body on failure
+- **Commit:** `fix delete path accept 404 and enable tracking for synced flag`
 
-**Config & CI/CD (Tasks 31-33):**
-31. populate dotenv with actual Supabase project credentials
-32. add GitHub Actions workflow for daily Supabase keep-alive ping
-33. copy sync schema and trigger SQL files for documentation reference
-
-**Dashboard (Tasks 34-36):**
-34. scaffold Next.js dashboard with Tailwind TypeScript and Supabase client
-35. add dashboard layout with Arabic RTL shell and Supabase Realtime provider
-36. add home page with backup stats security badge and device cards
+### 14. synced=1 not persisted after successful flush
+- **Root cause:** `QueryTrackingBehavior.NoTracking` — setting `item.Synced = 1` not tracked by EF Core, `SaveChanges()` had no effect
+- **Fix:** Added `.AsTracking()` to pending_sync query in `FlushPendingAsync`
+- **Commit:** `fix delete path accept 404 and enable tracking` (same commit as #13)
 
 ---
 
-## Testing Roadmap per ROADMAP Phases
+## OPEN PROBLEM — NOT YET FIXED
 
-| Phase | Test Strategy |
-|-------|---------------|
-| Phase 1 | Run app, verify no crash. Check SQLite schema via DB browser. Confirm `pending_sync` populates on save. |
-| Phase 2 | Disconnect WiFi, make changes, reconnect — verify `pending_sync` flushes. Check Supabase tables for rows. |
-| Phase 3 | Trigger `CreateAutoBackup()`, verify shadow copy exists. Verify encrypted file on Supabase Storage. Trigger restore. |
-| Phase 4 | Close app from X button — verify CloseConfirmWindow appears. Backup from BackupManagerWindow. Check status bar updates. |
-| Phase 5 | `npm run dev` in dashboard, verify cards show Supabase data. Check realtime updates on sync_logs insert. |
-| Phase 6 | Simulate clock drift, verify ConflictResolver warns. Delete SQLite, trigger DisasterRecovery. Verify GitHub Actions runs. |
+### No automatic sync after startup
 
----
+**Observed:** New customer added → Pending: 1 | Online | Last sync: — (stays forever)
 
-## Risks and Warnings
+**Diagnosis confirmed:**
+- `FlushPendingAsync` is called only 3 times during the app lifecycle:
+  1. Startup (immediate, fire-and-forget)
+  2. Startup + 3 seconds (delayed, fire-and-forget)
+  3. On connectivity change from Offline → Online (event-driven)
+- **No periodic timer calls FlushPendingAsync** — the `_statusBarTimer` (10s) only READS pending count, never flushes
+- **No event fires when new rows appear in pending_sync** — triggers operate at SQL level only, C# layer is not notified
+- Since the app is already Online after startup, no connectivity state change occurs → no subsequent flush
 
-| Risk | Severity | Mitigation |
-|------|----------|------------|
-| **DI breaks existing windows** | 🔴 High | Gradual rollout; keep `new AppDbContext()` fallback; test 3 windows first |
-| **SQLite triggers conflict with EF Core** | 🔴 High | Triggers operate at SQL level only; EF Core doesn't see them until next query |
-| **First sync wipes data** | 🔴 High | BackupGuard threshold (20%) prevents overwrite; manual backup before first sync |
-| **Encryption salt loss** | 🟡 Medium | Triple backup: Windows Credential Manager + QR code + recovery file |
-| **Supabase SDK version conflicts** | 🟡 Medium | Isolate Supabase HTTP calls from EF Core SQLite calls; no shared dependencies |
-| **Service role key exposure** | 🔴 High | `.gitignore` in place; `.env.example` excludes secrets; verify before every commit |
-| **Hardcoded `C:\WalidFacture\` paths** | 🟡 Medium | Not SyncVault scope; document for separate fix session |
+**Root cause:** Zero automatic sync mechanism after initial startup flushes complete.
 
 ---
 
-## Session Summary
+## SUGGESTED NEXT STEPS (options, not decisions)
 
-**Hours spent:** ~6h (analysis + planning + Supabase setup)
-**Files created:** ROADMAP.md (2176 lines), README.md (810 lines), .env, SESSION_01_REPORT.md
-**Tables created:** 4 (backups, sync_logs, devices, ping_logs)
-**Buckets created:** 2 (backups, immutable-backups)
-**Tasks pending:** 36 (ProManSystem: 30 commits, SyncVault: 6 commits)
-**Ready for Phase 1 execution:** YES ✓
+### Option A: Periodic timer approach
+Add a `System.Threading.Timer` in `App.xaml.cs` that calls `FlushPendingAsync` every N seconds (e.g., 30s) regardless of connectivity, using the same try-catch pattern as startup. Simplest fix, guaranteed to work.
+
+### Option B: Event-driven approach  
+Override `SaveChanges()` in AppDbContext to fire a `DataChanged` event after every successful save. App.xaml.cs subscribes and calls `FlushPendingAsync` with a short debounce delay (e.g., 2s).
+
+### Option C: Both
+Periodic timer (30s) as safety net + event-driven for immediate sync. Most robust, slightly more complex.
+
+### Recommendation
+Start with Option A (one timer, 5 lines of code) since it's the simplest guaranteed fix. Add Option B later if low-latency sync is needed.
+
+---
+
+## HOW TO RESUME TESTING TONIGHT
+
+### 1. Start the app
+```
+Run: bin\Debug\net8.0-windows\ProManSystem.exe
+Or: dotnet run --project C:\Users\Mounir\source\repos\ProManSystem\ProManSystem
+```
+Kill any stale processes first: `Get-Process ProManSystem | Stop-Process -Force`
+
+### 2. Check current pending count
+- Look at status bar (bottom of HomeWindow): "Pending: N"
+- Or open BackupManagerWindow (click status bar) → Sync Log tab
+
+### 3. Manually trigger a flush for testing
+- Turn WiFi off, wait 2 seconds, turn WiFi on → connectivity change triggers sync
+- Or add code temporarily (since sync isn't automatic yet — see Open Problem above)
+
+### 4. Debug files (all in `%LocalAppData%\ProManSystem\`)
+| File | What it tells you |
+|------|-------------------|
+| `env_debug.txt` | Whether SUPABASE_URL and KEY loaded from .env |
+| `conn_debug.txt` | ConnectivityWatcher ping results (URL, status code, Online/Offline) |
+| `sync_errors.txt` | SyncEngine flush logs: STARTED, errors with stacktraces, completed |
+
+### 5. Check Supabase directly
+- Tables → customers, products, etc. to see if rows arrived
+- SQL Editor: `SELECT COUNT(*) FROM customers; SELECT * FROM customers ORDER BY id DESC LIMIT 5;`
+
+### 6. Check local pending_sync
+- Use DB Browser for SQLite or any SQLite tool
+- Query: `SELECT id, table_name, row_id, operation, synced FROM pending_sync WHERE synced = 0;`
+- synced=0 rows = still pending, synced=1 = flushed to Supabase
+
+---
+
+## KEY FILE LOCATIONS
+
+### Data files
+| File | Path |
+|------|------|
+| Local DB | `%LocalAppData%\ProManSystem\app.db` |
+| .env config | `C:\Users\Mounir\Desktop\SyncVault\.env` |
+| .env in output | `bin\Debug\net8.0-windows\.env` |
+| Local backup | `%LocalAppData%\ProManSystem\Backups\app_backup_20260618_164337.db` (792 KB) |
+| Debug logs | `%LocalAppData%\ProManSystem\env_debug.txt`, `conn_debug.txt`, `sync_errors.txt` |
+
+### Source files touched this session
+| File | What changed |
+|------|-------------|
+| `Services/Sync/ConnectivityWatcher.cs` | HTTP ping, file logging, race condition fix |
+| `Services/Sync/SyncEngine.cs` | Upsert logic, DELETE 404 handling, .AsTracking(), entry logging, column casing |
+| `Services/Sync/SupabaseClientFactory.cs` | Non-blocking InitializeAsync |
+| `Services/Sync/DailyPinger.cs` | Supabase ping model |
+| `Services/Sync/BackupGuard.cs` | Data integrity checks |
+| `Services/DatabaseMaintenanceService.cs` | WAL mode, device_id auto-gen, SQL execution fix |
+| `Data/AppDbContext.cs` | PragmaInterceptor, PendingSync DbSet, DbContextOptions constructor |
+| `Data/AppDbContextFactory.cs` | Custom factory for DI (avoids constructor ambiguity) |
+| `Data/SqlitePragmaInterceptor.cs` | Per-connection PRAGMA application |
+| `Models/PendingSync.cs` | Column mappings (snake_case → PascalCase) |
+| `DependencyInjection/DotEnvLoader.cs` | .env file loader |
+| `DependencyInjection/ServiceCollectionExtensions.cs` | All DI registrations |
+| `DependencyInjection/AppHost.cs` | Host builder entry point |
+| `App.xaml.cs` | Startup sequence, connectivity hooks, forced flush, debug logs |
+| `HomeWindow.xaml.cs` | Status bar timer, connectivity subscription, RefreshStatusBarAsync |
+| `HomeWindow.xaml` | Status bar RowDefinition + controls |
+| `Views/CloseConfirmWindow.xaml/.cs` | Backup prompt on close |
+| `Views/BackupManagerWindow.xaml/.cs` | Backup/sync management UI |
+| `Database/sync_schema.sql` | ALTER TABLE + CREATE pending_sync |
+| `Database/sync_triggers.sql` | 36 triggers for automatic change tracking |
+| `ProManSystem.csproj` | NuGet packages, .env auto-copy, SQL file output |
+
+### Supabase (MCP — no files)
+| Migration | What |
+|-----------|------|
+| `create_syncvault_tables` | 4 infrastructure tables + RLS + Realtime |
+| `create_promanager_data_tables` | 17 data tables matching local SQLite |
+| `add_device_id_to_data_tables` | device_id column on all 17 data tables |
+| Storage buckets: `backups`, `immutable-backups` | Backup file storage |
+
+---
+
+## GIT LOG — ProManSystem (last 10 commits)
+
+```
+f60cb98 fix delete path accept 404 and enable tracking for synced flag persistence
+3a739ef add response body to sync error logging
+af5b0bd fix upsert request casing and add merge-duplicates header
+16573ba fix column mappings for pending_sync snake_case to EF Core PascalCase
+f2b7ebb add file logs around startup flush to trace execution
+9d1fa2b fix race condition read App.IsOnline on load and add flush entry logging
+cfe0667 fix debug log paths from C drive to LocalAppData
+94dacd7 fix auto-copy dotenv to output add sync error logging and forced startup flush
+d5668b0 add debug logging for dotenv and connectivity checks to file
+d365421 fix apply SQLite PRAGMAs on every EF Core connection via interceptor
+```
+
+---
+
+## GIT LOG — SyncVault (last 3 commits)
+
+```
+0e77458 scaffold Next.js dashboard with Tailwind Supabase client and all pages
+ecba277 add GitHub Actions keep-alive workflow and sync SQL documentation files
+6f020a3 add session 01 progress report
+```

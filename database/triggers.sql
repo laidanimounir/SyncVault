@@ -1,14 +1,4 @@
 -- SyncVault: مشغلات تتبع التغييرات التلقائية
--- يُنفَّذ بعد sync_schema.sql
-
-CREATE TRIGGER IF NOT EXISTS trg_companies_after_update
-AFTER UPDATE ON Companies
-BEGIN
-    UPDATE Companies SET updated_at = datetime('now') WHERE CompanyId = NEW.CompanyId;
-    INSERT INTO pending_sync (table_name, row_id, company_id, operation, device_id)
-    VALUES ('Companies', NEW.CompanyId, NEW.CompanyId, 'UPDATE',
-            (SELECT Value FROM AppSettings WHERE Key = 'device_id'));
-END;
 
 CREATE TRIGGER IF NOT EXISTS trg_customers_after_insert
 AFTER INSERT ON Customers
@@ -307,5 +297,105 @@ BEFORE DELETE ON ProductCategories
 BEGIN
     INSERT INTO pending_sync (table_name, row_id, company_id, operation, device_id)
     VALUES ('ProductCategories', OLD.Id, OLD.CompanyId, 'DELETE',
+            (SELECT Value FROM AppSettings WHERE Key = 'device_id'));
+END;
+
+-- ═══════════════════════════════════════════════
+-- Invoice Lines (no CompanyId column)
+-- ═══════════════════════════════════════════════
+
+CREATE TRIGGER IF NOT EXISTS trg_salesinvoicelines_after_insert
+AFTER INSERT ON SalesInvoiceLines
+BEGIN
+    INSERT INTO pending_sync (table_name, row_id, company_id, operation, device_id)
+    VALUES ('SalesInvoiceLines', NEW.Id, 0, 'INSERT',
+            (SELECT Value FROM AppSettings WHERE Key = 'device_id'));
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_salesinvoicelines_after_update
+AFTER UPDATE ON SalesInvoiceLines
+BEGIN
+    INSERT INTO pending_sync (table_name, row_id, company_id, operation, device_id)
+    VALUES ('SalesInvoiceLines', NEW.Id, 0, 'UPDATE',
+            (SELECT Value FROM AppSettings WHERE Key = 'device_id'));
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_salesinvoicelines_before_delete
+BEFORE DELETE ON SalesInvoiceLines
+BEGIN
+    INSERT INTO pending_sync (table_name, row_id, company_id, operation, device_id)
+    VALUES ('SalesInvoiceLines', OLD.Id, 0, 'DELETE',
+            (SELECT Value FROM AppSettings WHERE Key = 'device_id'));
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_purchaseinvoicelines_after_insert
+AFTER INSERT ON PurchaseInvoiceLines
+BEGIN
+    INSERT INTO pending_sync (table_name, row_id, company_id, operation, device_id)
+    VALUES ('PurchaseInvoiceLines', NEW.Id, 0, 'INSERT',
+            (SELECT Value FROM AppSettings WHERE Key = 'device_id'));
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_purchaseinvoicelines_after_update
+AFTER UPDATE ON PurchaseInvoiceLines
+BEGIN
+    INSERT INTO pending_sync (table_name, row_id, company_id, operation, device_id)
+    VALUES ('PurchaseInvoiceLines', NEW.Id, 0, 'UPDATE',
+            (SELECT Value FROM AppSettings WHERE Key = 'device_id'));
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_purchaseinvoicelines_before_delete
+BEFORE DELETE ON PurchaseInvoiceLines
+BEGIN
+    INSERT INTO pending_sync (table_name, row_id, company_id, operation, device_id)
+    VALUES ('PurchaseInvoiceLines', OLD.Id, 0, 'DELETE',
+            (SELECT Value FROM AppSettings WHERE Key = 'device_id'));
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_commercialsalesinvoicelines_after_insert
+AFTER INSERT ON CommercialSalesInvoiceLines
+BEGIN
+    INSERT INTO pending_sync (table_name, row_id, company_id, operation, device_id)
+    VALUES ('CommercialSalesInvoiceLines', NEW.Id, 0, 'INSERT',
+            (SELECT Value FROM AppSettings WHERE Key = 'device_id'));
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_commercialsalesinvoicelines_after_update
+AFTER UPDATE ON CommercialSalesInvoiceLines
+BEGIN
+    INSERT INTO pending_sync (table_name, row_id, company_id, operation, device_id)
+    VALUES ('CommercialSalesInvoiceLines', NEW.Id, 0, 'UPDATE',
+            (SELECT Value FROM AppSettings WHERE Key = 'device_id'));
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_commercialsalesinvoicelines_before_delete
+BEFORE DELETE ON CommercialSalesInvoiceLines
+BEGIN
+    INSERT INTO pending_sync (table_name, row_id, company_id, operation, device_id)
+    VALUES ('CommercialSalesInvoiceLines', OLD.Id, 0, 'DELETE',
+            (SELECT Value FROM AppSettings WHERE Key = 'device_id'));
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_commercialpurchaseinvoicelines_after_insert
+AFTER INSERT ON CommercialPurchaseInvoiceLines
+BEGIN
+    INSERT INTO pending_sync (table_name, row_id, company_id, operation, device_id)
+    VALUES ('CommercialPurchaseInvoiceLines', NEW.Id, 0, 'INSERT',
+            (SELECT Value FROM AppSettings WHERE Key = 'device_id'));
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_commercialpurchaseinvoicelines_after_update
+AFTER UPDATE ON CommercialPurchaseInvoiceLines
+BEGIN
+    INSERT INTO pending_sync (table_name, row_id, company_id, operation, device_id)
+    VALUES ('CommercialPurchaseInvoiceLines', NEW.Id, 0, 'UPDATE',
+            (SELECT Value FROM AppSettings WHERE Key = 'device_id'));
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_commercialpurchaseinvoicelines_before_delete
+BEFORE DELETE ON CommercialPurchaseInvoiceLines
+BEGIN
+    INSERT INTO pending_sync (table_name, row_id, company_id, operation, device_id)
+    VALUES ('CommercialPurchaseInvoiceLines', OLD.Id, 0, 'DELETE',
             (SELECT Value FROM AppSettings WHERE Key = 'device_id'));
 END;

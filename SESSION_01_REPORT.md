@@ -253,3 +253,188 @@ d365421 fix apply SQLite PRAGMAs on every EF Core connection via interceptor
 ecba277 add GitHub Actions keep-alive workflow and sync SQL documentation files
 6f020a3 add session 01 progress report
 ```
+
+
+
+
+
+توقفت هنا و ماللشكال و الضافتا المكتشة هنا 
+
+# SyncVault — Session 02 Roadmap
+**Date:** June 19, 2026  
+**Status:** Session 01 complete — pipeline working. Session 02 = fixes + new features.
+
+---
+
+## ✅ ما اكتمل في Session 01
+
+| المكوّن | الحالة |
+|---|---|
+| 48 trigger على 16 جدول | ✅ |
+| Sync كل 30 ثانية | ✅ |
+| Backfill كامل (كل الجداول) | ✅ |
+| sync_logs يُكتب على Supabase | ✅ |
+| devices مسجل على Supabase | ✅ |
+| DailyPinger (ping_logs) | ✅ |
+| ShadowCopy كل 30 دقيقة | ✅ |
+| CloseConfirmWindow | ✅ |
+| Status bar في Sidebar | ✅ |
+
+---
+
+## 🔴 المشاكل المكتشفة في Session 01
+
+### المشكلة 1 — DELETE لا يحذف من Supabase
+**السبب:** SyncEngine يرسل `PATCH is_deleted=true` بدل `DELETE` حقيقي.  
+**النتيجة:** الصف يبقى في Supabase إلى الأبد.  
+**الحل:** تغيير 5 أسطر في `SyncEngine.cs` — استبدال PATCH بـ DELETE.  
+**الوقت:** 30 دقيقة.
+
+---
+
+### المشكلة 2 — Backup لا يُرفع على Supabase Storage
+**السبب:** `SecureBackupService.EncryptAndUploadAsync()` موجود لكن لا أحد يستدعيه تلقائياً.  
+**النتيجة:** جدول `backups` فارغ دائماً.  
+**الحل:** إضافة `_backupTimer` في `App.xaml.cs` كل 24 ساعة + كتابة في جدول `backups`.  
+**الوقت:** 2 ساعة.
+
+---
+
+### المشكلة 3 — Dashboard لا يعرض بيانات
+**السبب:** صفحات Next.js بدون `'use client'` — تعمل كـ Server Components، والـ Supabase client يحتاج browser.  
+**النتيجة:** لا يتحدث مع Supabase أبداً.  
+**الحل:** إضافة `'use client'` في 4 ملفات.  
+**الوقت:** 10 دقائق.
+
+---
+
+## 🟡 الميزات الجديدة المطلوبة
+
+### الميزة 1 — Pull Sync
+**الهدف:** ما يوجد على Supabase ينزل محلياً تلقائياً.
+
+**سيناريوهات الاستخدام:**
+- العميل يعمل نهاراً → بياناته تصعد Supabase → أنت تفتح ليلاً → تنزل بياناته
+- أنت تصحح خطأ ليلاً → يصعد Supabase → العميل يفتح صباحاً → ينزل التصحيح
+- تلفت `app.db` محلياً → Pull كامل من Supabase → تعود البيانات كاملة
+
+**كيف يعمل:**
+```
+عند فتح البرنامج:
+1. Push أولاً — ارفع كل pending محلي
+2. انتظر 5 ثوانٍ
+3. Pull — اسحب كل updated_at > last_pull_timestamp من Supabase
+4. احفظ last_pull_timestamp الجديد
+```
+
+**قاعدة التعارض:** آخر `updated_at` يفوز — بسيطة وآمنة.  
+**الوقت:** 4 ساعات.
+
+---
+
+### الميزة 2 — Daily Backup على Supabase Storage
+**الهدف:** نسخة يومية من `app.db` مشفرة ومرفوعة.
+
+**التفاصيل:**
+- كل 24 ساعة → GZip + AES-256 → Supabase Storage
+- عند إغلاق التطبيق → نسخة فورية
+- كل نسخة تُسجَّل في جدول `backups`
+- احتفاظ بـ 30 نسخة — تُحذف الأقدم تلقائياً
+
+**الوقت:** 2 ساعة.
+
+---
+
+### الميزة 3 — Immutable Backups + زر إيقاف Sync
+**الهدف:** حماية من كارثة البيانات (العميل يخرب البيانات → تصعد Supabase → كارثة).
+
+**الحل:**
+```
+زر STOP SYNC في Dashboard
+        ↓
+devices.sync_paused = true على Supabase
+        ↓
+WPF app يقرأ الـ flag كل 60 ثانية → يوقف FlushPendingAsync
+        ↓
+تختار نسخة سليمة → تستعيدها
+        ↓
+sync_paused = false → يعود كل شيء
+```
+
+**خطة الاستعادة الكاملة:**
+1. اضغط STOP SYNC في Dashboard
+2. اختر نسخة من قائمة Backups
+3. تحميل + فك تشفير + تحقق من سلامة البيانات
+4. استبدال `app.db` المحلي
+5. `last_pull_timestamp = MinValue` → Pull كامل
+6. إعادة تشغيل التطبيق → RESUME SYNC
+
+**الوقت:** 6 ساعات.
+
+---
+
+### الميزة 4 — Google Drive (Phase 6+)
+**الهدف:** طبقة احتياطية ثانية خارج Supabase.
+- نسخة أسبوعية → Google Drive → محمية 6 أشهر
+- لا يمكن حذفها إلا يدوياً
+- **مؤجلة** — Supabase يكفي للمرحلة الأولى.
+
+---
+
+## 📋 ترتيب التنفيذ
+
+| # | المهمة | يعتمد على | الوقت | السبب |
+|---|---|---|---|---|
+| 1 | Dashboard fix (`'use client'`) | لا شيء | 10 دقائق | فوري — يفتح التحقق من كل شيء |
+| 2 | Hard DELETE | لا شيء | 30 دقيقة | أبسط إصلاح — يجب قبل Pull |
+| 3 | Pull Sync | #2 | 4 ساعات | القلب المفقود — يحل سيناريوهات العميل |
+| 4 | Daily Backup | #3 | 2 ساعة | Backup مفيد فقط مع Pull للاستعادة |
+| 5 | STOP SYNC + Restore | #3 + #4 | 6 ساعات | حماية الكارثة — يحتاج Pull و Backup |
+| 6 | Google Drive | #4 | مؤجل | Phase 6+ |
+
+**الإجمالي: ~13 ساعة عمل فعلي**
+
+---
+
+## 🗂️ الملفات التي ستتغير
+
+| الملف | التغيير |
+|---|---|
+| `Services/Sync/SyncEngine.cs` | DELETE → hard delete |
+| `Services/Sync/PullSyncService.cs` | ملف جديد |
+| `App.xaml.cs` | _backupTimer + Pull startup + STOP SYNC polling |
+| `dashboard/app/page.tsx` | إضافة `'use client'` |
+| `dashboard/app/logs/page.tsx` | إضافة `'use client'` |
+| `dashboard/app/backups/page.tsx` | إضافة `'use client'` |
+| `dashboard/components/SyncStatusCard.tsx` | إضافة `'use client'` |
+
+---
+
+## 🧪 خطة التجريب بعد كل إصلاح
+
+### بعد Fix 1 (DELETE):
+1. أضف زبون → تحقق Supabase ✅
+2. احذفه → تحقق Supabase → يجب أن يختفي ✅
+
+### بعد Fix 2 (Dashboard):
+1. افتح `localhost:3000`
+2. يجب أن يظهر: 80+ نشاط، 1 جهاز ✅
+
+### بعد Fix 3 (Backup):
+1. انتظر 24 ساعة أو استدع يدوياً
+2. تحقق Supabase Storage → ملف موجود ✅
+3. تحقق جدول `backups` → صف مسجل ✅
+
+### بعد Pull Sync:
+1. عدّل بيانات على Supabase مباشرة
+2. أغلق وافتح التطبيق
+3. تحقق محلياً → التعديل موجود ✅
+4. احذف `app.db` → أعد التشغيل → Pull كامل ✅
+
+---
+
+## 📝 ملاحظات مهمة
+
+- **triggers تُعيد الحصول**: عند Pull، الـ INSERT في SQLite يُطلق trigger → pending_sync. هذا لا يسبب مشكلة لأن Push يحدث قبل Pull، وأي trigger جديد سيُرسل لـ Supabase مرة أخرى بنفس البيانات (upsert = لا تكرار).
+- **app.db الحجم**: 792KB → بعد GZip ~200KB → Supabase Storage 1GB مجاني = 5000+ نسخة.
+- **STOP SYNC**: يتحقق منه WPF كل 60 ثانية. إذا نُسي مفعّلاً → يُلغى تلقائياً بعد 24 ساعة.

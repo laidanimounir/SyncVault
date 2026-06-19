@@ -2,11 +2,12 @@ import { supabase } from "@/lib/supabase";
 import type { SyncLog } from "@/lib/types";
 
 export default async function LogsPage() {
-  const { data: logs } = await supabase
+  const { data: logs, error } = await supabase
     .from("sync_logs")
     .select("*")
     .order("created_at", { ascending: false })
     .limit(100);
+  if (error) console.error("[logs]", error);
 
   return (
     <div className="space-y-4">

@@ -25,3 +25,8 @@ desktop.ini
 
 # Logs
 *.log
+
+# Node / Dashboard
+node_modules/
+.next/
+

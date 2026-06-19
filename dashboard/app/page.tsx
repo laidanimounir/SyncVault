@@ -12,25 +12,29 @@ function formatBytes(bytes: number): string {
 }
 
 export default async function HomePage() {
-  const { data: backups } = await supabase
+  const { data: backups, error: backupsError } = await supabase
     .from("backups")
     .select("*")
     .order("created_at", { ascending: false })
     .limit(1);
+  if (backupsError) console.error("[backups]", backupsError);
 
-  const { count: totalBackups } = await supabase
+  const { count: totalBackups, error: totalError } = await supabase
     .from("backups")
     .select("*", { count: "exact", head: true });
+  if (totalError) console.error("[totalBackups]", totalError);
 
-  const { count: failedOps } = await supabase
+  const { count: failedOps, error: failedError } = await supabase
     .from("sync_logs")
     .select("*", { count: "exact", head: true })
     .eq("success", false);
+  if (failedError) console.error("[failedOps]", failedError);
 
-  const { data: devices } = await supabase
+  const { data: devices, error: devicesError } = await supabase
     .from("devices")
     .select("*")
     .order("last_seen", { ascending: false });
+  if (devicesError) console.error("[devices]", devicesError);
 
   const lastBackup = (backups?.[0] ?? null) as Backup | null;
   const lastBackupDate = lastBackup ? new Date(lastBackup.created_at) : null;

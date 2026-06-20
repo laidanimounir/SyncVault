@@ -34,7 +34,7 @@ export default async function HomePage() {
 
   const { data: devices, error: devicesError } = await supabase
     .from("devices")
-    .select("*")
+    .select("id, name, last_seen, last_sync, sync_paused")
     .order("last_seen", { ascending: false });
   if (devicesError) console.error("[devices]", devicesError);
 

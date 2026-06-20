@@ -24,4 +24,5 @@ export interface Device {
   name: string;
   last_seen: string;
   last_sync: string;
+  sync_paused: boolean;
 }

@@ -1,3 +1,5 @@
+'use client';
+
 import { supabase } from "@/lib/supabase";
 import StatusCard from "@/components/StatusCard";
 import SecurityBadge from "@/components/SecurityBadge";

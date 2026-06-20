@@ -1,3 +1,5 @@
+'use client';
+
 import { supabase } from "@/lib/supabase";
 import type { SyncLog } from "@/lib/types";
 

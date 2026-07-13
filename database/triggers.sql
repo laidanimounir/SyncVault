@@ -1,5 +1,30 @@
 -- SyncVault: مشغلات تتبع التغييرات التلقائية
 
+CREATE TRIGGER IF NOT EXISTS trg_companies_after_insert
+AFTER INSERT ON Companies
+BEGIN
+    INSERT INTO pending_sync (table_name, row_id, company_id, operation, device_id)
+    VALUES ('Companies', NEW.CompanyId, NEW.CompanyId, 'INSERT',
+            (SELECT Value FROM AppSettings WHERE Key = 'device_id'));
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_companies_after_update
+AFTER UPDATE ON Companies
+BEGIN
+    UPDATE Companies SET updated_at = datetime('now') WHERE CompanyId = NEW.CompanyId;
+    INSERT INTO pending_sync (table_name, row_id, company_id, operation, device_id)
+    VALUES ('Companies', NEW.CompanyId, NEW.CompanyId, 'UPDATE',
+            (SELECT Value FROM AppSettings WHERE Key = 'device_id'));
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_companies_before_delete
+BEFORE DELETE ON Companies
+BEGIN
+    INSERT INTO pending_sync (table_name, row_id, company_id, operation, device_id)
+    VALUES ('Companies', OLD.CompanyId, OLD.CompanyId, 'DELETE',
+            (SELECT Value FROM AppSettings WHERE Key = 'device_id'));
+END;
+
 CREATE TRIGGER IF NOT EXISTS trg_customers_after_insert
 AFTER INSERT ON Customers
 BEGIN
